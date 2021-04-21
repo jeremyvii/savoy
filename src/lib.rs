@@ -39,8 +39,10 @@ impl Savoy {
     /// The midi data is split up like so:
     ///
     /// * `data[0]`: Contains the status and the channel. Source: [source]
-    /// * `data[1]`: Contains the supplemental data for the message - so, if this was a NoteOn then this would contain the note.
-    /// * `data[2]`: Further supplemental data. Would be velocity in the case of a NoteOn message.
+    /// * `data[1]`: Contains the supplemental data for the message - so, if this was a
+    ///   NoteOn then this would contain the note.
+    /// * `data[2]`: Further supplemental data. Would be velocity in the case of a NoteOn
+    ///   message.
     ///
     /// [source]: http://www.midimountain.com/midi/midi_status.htm
     fn process_midi_event(&mut self, data: [u8; 3]) {
@@ -76,12 +78,7 @@ impl Plugin for Savoy {
     }
 
     fn new(_host: HostCallback) -> Self {
-        Savoy {
-            sample_rate: 44100.0,
-            note_duration: 0.0,
-            time: 0.0,
-            note: None,
-        }
+        Savoy { sample_rate: 44100.0, note_duration: 0.0, time: 0.0, note: None }
     }
 
     /// Inform the host that this plugin accepts midi input.
@@ -111,11 +108,7 @@ impl Plugin for Savoy {
                 let signal = (time * midi_pitch_to_freq(current_note) * TAU).sin();
 
                 let attack = 0.15;
-                let alpha = if note_duration < attack {
-                    note_duration / attack
-                } else {
-                    1.0
-                };
+                let alpha = if note_duration < attack { note_duration / attack } else { 1.0 };
 
                 output_sample = (signal * alpha) as f32;
 
