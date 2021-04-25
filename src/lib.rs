@@ -2,11 +2,19 @@
 extern crate vst;
 
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 use vst::api::{Events, Supported};
 use vst::buffer::AudioBuffer;
 use vst::event::Event;
-use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin};
+use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
+use vst::util::AtomicFloat;
+
+fn fmod(numerator: f64, denominator: f64) -> f64 {
+    let remainder = (numerator / denominator).floor();
+
+    numerator - remainder * denominator
+}
 
 /// Convert the midi note's pitch into the equivalent frequency.
 ///
@@ -21,12 +29,30 @@ fn midi_pitch_to_freq(pitch: u8) -> f64 {
 
 pub const TAU: f64 = PI * 2.0;
 
+enum Oscillator {
+    Saw,
+    Sine,
+    Square,
+    Triangle,
+}
+
 #[derive(Default)]
 struct Savoy {
     sample_rate: f64,
     time: f64,
     note_duration: f64,
     note: Option<u8>,
+    params: Arc<OscillatorParameters>,
+}
+
+struct OscillatorParameters {
+    oscillator: AtomicFloat,
+}
+
+impl Default for OscillatorParameters {
+    fn default() -> Self {
+        OscillatorParameters { oscillator: AtomicFloat::new(0.0) }
+    }
 }
 
 impl Savoy {
@@ -53,6 +79,65 @@ impl Savoy {
         }
     }
 
+    fn oscillator(osc_parameter: f32) -> Option<Oscillator> {
+        if osc_parameter < -0.5 {
+            Some(Oscillator::Saw)
+        } else if osc_parameter < 0.0 {
+            Some(Oscillator::Sine)
+        } else if osc_parameter < 0.5 {
+            Some(Oscillator::Square)
+        } else if osc_parameter < 1.0 {
+            Some(Oscillator::Triangle)
+        } else {
+            None
+        }
+    }
+
+    /// Generates signal based on the given time, pitch, and oscillator type.
+    fn signal(time: f64, pitch: u8, shape: Oscillator) -> f64 {
+        match shape {
+            Oscillator::Saw => Savoy::saw_signal(time, pitch),
+            Oscillator::Sine => Savoy::sine_signal(time, pitch),
+            Oscillator::Square => Savoy::square_signal(time, pitch),
+            Oscillator::Triangle => Savoy::triangle_signal(time, pitch),
+        }
+    }
+
+    /// Generates a sawtooth wave signal based on the given time and pitch.
+    fn saw_signal(time: f64, pitch: u8) -> f64 {
+        let full_period_time = 1.0 / midi_pitch_to_freq(pitch);
+        let local_time = fmod(time, full_period_time);
+
+        (local_time / full_period_time) * 2.0 - 1.0
+    }
+
+    /// Generates a sine wave signal based on the given time and pitch.
+    fn sine_signal(time: f64, pitch: u8) -> f64 {
+        (time * midi_pitch_to_freq(pitch) * TAU).sin()
+    }
+
+    /// Generates a square wave signal based on the given time and pitch.
+    fn square_signal(time: f64, pitch: u8) -> f64 {
+        (2.0 * PI * midi_pitch_to_freq(pitch) * time).sin().signum()
+    }
+
+    fn triangle_signal(time: f64, pitch: u8) -> f64 {
+        let full_period_time = 1.0 / midi_pitch_to_freq(pitch);
+        let local_time = fmod(time, full_period_time);
+
+        let value = local_time / full_period_time;
+
+        let result = if value < 0.25 {
+            value * 4.0
+        } else if value < 0.75 {
+            2.0 - (value * 4.0)
+        } else {
+            value * 4.0 - 4.0
+        };
+
+        result
+    }
+
     fn note_on(&mut self, note: u8) {
         self.note_duration = 0.0;
         self.note = Some(note)
@@ -73,12 +158,19 @@ impl Plugin for Savoy {
             inputs: 2,
             outputs: 2,
             category: Category::Synth,
+            parameters: 1,
             ..Info::default()
         }
     }
 
     fn new(_host: HostCallback) -> Self {
-        Savoy { sample_rate: 44100.0, note_duration: 0.0, time: 0.0, note: None }
+        Savoy {
+            sample_rate: 44100.0,
+            note_duration: 0.0,
+            time: 0.0,
+            note: None,
+            params: Arc::new(OscillatorParameters::default()),
+        }
     }
 
     /// Inform the host that this plugin accepts midi input.
@@ -104,8 +196,15 @@ impl Plugin for Savoy {
             let time = self.time;
             let note_duration = self.note_duration;
 
+            let osc = Savoy::oscillator(self.params.oscillator.get());
+
+            let osc = match osc {
+                Some(osc) => osc,
+                None => Oscillator::Sine,
+            };
+
             if let Some(current_note) = self.note {
-                let signal = (time * midi_pitch_to_freq(current_note) * TAU).sin();
+                let signal = Savoy::signal(time, current_note, osc);
 
                 let attack = 0.15;
                 let alpha = if note_duration < attack { note_duration / attack } else { 1.0 };
@@ -118,8 +217,8 @@ impl Plugin for Savoy {
                 output_sample = 0.0;
             }
 
-            for buf_idx in 0..output_count {
-                let buffer = output_buffer.get_mut(buf_idx);
+            for buffer_index in 0..output_count {
+                let buffer = output_buffer.get_mut(buffer_index);
                 buffer[sample_index] = output_sample;
             }
         }
@@ -134,6 +233,43 @@ impl Plugin for Savoy {
                 _ => (),
             }
         }
+    }
+
+    // Return the parameter object. This method can be omitted if the
+    // plugin has no parameters.
+    fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
+        Arc::clone(&self.params) as Arc<dyn PluginParameters>
+    }
+}
+
+impl PluginParameters for OscillatorParameters {
+    fn get_parameter(&self, index: i32) -> f32 {
+        match index {
+            0 => self.oscillator.get(),
+            _ => 0.0,
+        }
+    }
+
+    fn set_parameter(&self, index: i32, value: f32) {
+        match index {
+            0 => self.oscillator.set(value),
+            _ => (),
+        }
+    }
+
+    fn get_parameter_text(&self, index: i32) -> String {
+        match index {
+            0 => format!("{:.2}", (self.oscillator.get() - 0.5) * 2f32),
+            _ => "".to_string(),
+        }
+    }
+
+    fn get_parameter_name(&self, index: i32) -> String {
+        match index {
+            0 => "Osc",
+            _ => "",
+        }
+        .to_string()
     }
 }
 
