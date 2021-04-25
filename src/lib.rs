@@ -121,21 +121,20 @@ impl Savoy {
         (2.0 * PI * midi_pitch_to_freq(pitch) * time).sin().signum()
     }
 
+    /// Generates a triangle wave signal based on the given time and pitch.
     fn triangle_signal(time: f64, pitch: u8) -> f64 {
         let full_period_time = 1.0 / midi_pitch_to_freq(pitch);
         let local_time = fmod(time, full_period_time);
 
         let value = local_time / full_period_time;
 
-        let result = if value < 0.25 {
+        if value < 0.25 {
             value * 4.0
         } else if value < 0.75 {
             2.0 - (value * 4.0)
         } else {
             value * 4.0 - 4.0
-        };
-
-        result
+        }
     }
 
     fn note_on(&mut self, note: u8) {
