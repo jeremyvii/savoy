@@ -10,6 +10,15 @@ use vst::event::Event;
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
 use vst::util::AtomicFloat;
 
+/// Returns the floating-point remainder of numer/denom (rounded towards zero).
+///
+/// # Examples
+///
+/// ```
+/// let result = fmod(5.3, 2.0);
+///
+/// assert_eq!(result, 1.3);
+/// ```
 fn fmod(numerator: f64, denominator: f64) -> f64 {
     let remainder = (numerator / denominator).floor();
 
