@@ -10,7 +10,7 @@ use vst::event::Event;
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
 use vst::util::AtomicFloat;
 
-/// Returns the floating-point remainder of numer/denom (rounded towards zero).
+/// Returns the floating-point remainder of the given numerator/denominator.
 ///
 /// # Examples
 ///
