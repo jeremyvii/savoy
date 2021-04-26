@@ -36,6 +36,10 @@ fn midi_pitch_to_freq(pitch: u8) -> f64 {
     ((f64::from(pitch as i8 - A4_PITCH)) / 12.).exp2() * A4_FREQ
 }
 
+fn midi_velocity_to_amplitude(velocity: u8) -> f64 {
+    f64::from(velocity) / 127.0
+}
+
 pub const TAU: f64 = PI * 2.0;
 
 enum Oscillator {
@@ -51,6 +55,7 @@ struct Savoy {
     time: f64,
     note_duration: f64,
     note: Option<u8>,
+    velocity: u8,
     params: Arc<OscillatorParameters>,
 }
 
@@ -83,7 +88,7 @@ impl Savoy {
     fn process_midi_event(&mut self, data: [u8; 3]) {
         match data[0] {
             128 => self.note_off(data[1]),
-            144 => self.note_on(data[1]),
+            144 => self.note_on(data[1], data[2]),
             _ => (),
         }
     }
@@ -146,9 +151,10 @@ impl Savoy {
         }
     }
 
-    fn note_on(&mut self, note: u8) {
+    fn note_on(&mut self, note: u8, velocity: u8) {
         self.note_duration = 0.0;
-        self.note = Some(note)
+        self.note = Some(note);
+        self.velocity = velocity;
     }
 
     fn note_off(&mut self, note: u8) {
@@ -177,6 +183,7 @@ impl Plugin for Savoy {
             note_duration: 0.0,
             time: 0.0,
             note: None,
+            velocity: 0b0,
             params: Arc::new(OscillatorParameters::default()),
         }
     }
@@ -217,7 +224,9 @@ impl Plugin for Savoy {
                 let attack = 0.15;
                 let alpha = if note_duration < attack { note_duration / attack } else { 1.0 };
 
-                output_sample = (signal * alpha) as f32;
+                let amplitude = midi_velocity_to_amplitude(self.velocity);
+
+                output_sample = (signal * alpha * amplitude) as f32;
 
                 self.time += per_sample;
                 self.note_duration += per_sample;
