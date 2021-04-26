@@ -89,14 +89,14 @@ impl Savoy {
     }
 
     fn oscillator(osc_parameter: f32) -> Option<Oscillator> {
-        if osc_parameter < -0.5 {
+        if (0.0..0.25).contains(&osc_parameter) {
             Some(Oscillator::Saw)
-        } else if osc_parameter < 0.0 {
-            Some(Oscillator::Sine)
-        } else if osc_parameter < 0.5 {
+        } else if (0.25..0.5).contains(&osc_parameter) {
             Some(Oscillator::Square)
-        } else if osc_parameter < 1.0 {
+        } else if (0.5..0.75).contains(&osc_parameter) {
             Some(Oscillator::Triangle)
+        } else if (0.75..1.0).contains(&osc_parameter) {
+            Some(Oscillator::Sine)
         } else {
             None
         }
