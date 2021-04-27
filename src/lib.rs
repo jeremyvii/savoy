@@ -49,6 +49,26 @@ enum Oscillator {
     Triangle,
 }
 
+struct SavoyParameters {
+    oscillator: AtomicFloat,
+    attack: AtomicFloat,
+    decay: AtomicFloat,
+    sustain: AtomicFloat,
+    release: AtomicFloat,
+}
+
+impl Default for SavoyParameters {
+    fn default() -> Self {
+        SavoyParameters {
+            oscillator: AtomicFloat::new(0.0),
+            attack: AtomicFloat::new(0.0),
+            decay: AtomicFloat::new(1.0),
+            sustain: AtomicFloat::new(1.0),
+            release: AtomicFloat::new(0.0),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Savoy {
     sample_rate: f64,
@@ -56,17 +76,7 @@ struct Savoy {
     note_duration: f64,
     note: Option<u8>,
     velocity: u8,
-    params: Arc<OscillatorParameters>,
-}
-
-struct OscillatorParameters {
-    oscillator: AtomicFloat,
-}
-
-impl Default for OscillatorParameters {
-    fn default() -> Self {
-        OscillatorParameters { oscillator: AtomicFloat::new(0.0) }
-    }
+    params: Arc<SavoyParameters>,
 }
 
 impl Savoy {
@@ -172,7 +182,7 @@ impl Plugin for Savoy {
             inputs: 2,
             outputs: 2,
             category: Category::Synth,
-            parameters: 1,
+            parameters: 5,
             ..Info::default()
         }
     }
@@ -184,7 +194,7 @@ impl Plugin for Savoy {
             time: 0.0,
             note: None,
             velocity: 0b0,
-            params: Arc::new(OscillatorParameters::default()),
+            params: Arc::new(SavoyParameters::default()),
         }
     }
 
@@ -213,16 +223,25 @@ impl Plugin for Savoy {
 
             let osc = Savoy::oscillator(self.params.oscillator.get());
 
-            let osc = match osc {
+            let shape = match osc {
                 Some(osc) => osc,
                 None => Oscillator::Sine,
             };
 
-            if let Some(current_note) = self.note {
-                let signal = Savoy::signal(time, current_note, osc);
+            if let Some(pitch) = self.note {
+                let signal = Savoy::signal(time, pitch, shape);
 
-                let attack = 0.15;
-                let alpha = if note_duration < attack { note_duration / attack } else { 1.0 };
+                let attack: f64 = self.params.attack.get().into();
+
+                // @TODO
+                let decay: f64 = self.params.decay.get().into();
+                // @TODO
+                let sustain: f64 = self.params.sustain.get().into();
+                // @TODO
+                let release: f64 = self.params.release.get().into();
+
+                let alpha =
+                    if note_duration < attack { note_duration / attack } else { 1.0 };
 
                 let amplitude = midi_velocity_to_amplitude(self.velocity);
 
@@ -246,23 +265,24 @@ impl Plugin for Savoy {
         for event in events.events() {
             match event {
                 Event::Midi(ev) => self.process_midi_event(ev.data),
-                // More events can be handled here.
                 _ => (),
             }
         }
     }
 
-    // Return the parameter object. This method can be omitted if the
-    // plugin has no parameters.
     fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
         Arc::clone(&self.params) as Arc<dyn PluginParameters>
     }
 }
 
-impl PluginParameters for OscillatorParameters {
+impl PluginParameters for SavoyParameters {
     fn get_parameter(&self, index: i32) -> f32 {
         match index {
             0 => self.oscillator.get(),
+            1 => self.attack.get(),
+            2 => self.decay.get(),
+            3 => self.sustain.get(),
+            4 => self.release.get(),
             _ => 0.0,
         }
     }
@@ -270,6 +290,10 @@ impl PluginParameters for OscillatorParameters {
     fn set_parameter(&self, index: i32, value: f32) {
         match index {
             0 => self.oscillator.set(value),
+            1 => self.attack.set(value),
+            2 => self.decay.set(value),
+            3 => self.sustain.set(value),
+            4 => self.release.set(value),
             _ => (),
         }
     }
@@ -277,6 +301,10 @@ impl PluginParameters for OscillatorParameters {
     fn get_parameter_text(&self, index: i32) -> String {
         match index {
             0 => format!("{:.2}", (self.oscillator.get() - 0.5) * 2f32),
+            1 => format!("{:.2}", (self.attack.get() - 0.5) * 2f32),
+            2 => format!("{:.2}", (self.decay.get() - 0.5) * 2f32),
+            3 => format!("{:.2}", (self.sustain.get() - 0.5) * 2f32),
+            4 => format!("{:.2}", (self.release.get() - 0.5) * 2f32),
             _ => "".to_string(),
         }
     }
@@ -284,6 +312,10 @@ impl PluginParameters for OscillatorParameters {
     fn get_parameter_name(&self, index: i32) -> String {
         match index {
             0 => "Osc",
+            1 => "Attack",
+            2 => "Decay",
+            3 => "Sustain",
+            4 => "Release",
             _ => "",
         }
         .to_string()
