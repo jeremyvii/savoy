@@ -10,6 +10,10 @@ use vst::event::Event;
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
 use vst::util::AtomicFloat;
 
+mod envelope;
+
+use envelope::{Envelope, EnvelopeStage};
+
 /// Returns the floating-point remainder of the given numerator/denominator.
 ///
 /// # Examples
@@ -172,6 +176,35 @@ impl Savoy {
             self.note = None
         }
     }
+
+    fn envelope_multiplier(start: f64, end: f64, length: f64) -> f64 {
+        1.0 + ((end.ln() - start.ln()) / length)
+    }
+
+    fn envelope(&self, signal: f64) -> f64 {
+        let attack: f64 = self.params.attack.get().into();
+
+        // @TODO
+        let decay: f64 = self.params.decay.get().into();
+        // @TODO
+        let sustain: f64 = self.params.sustain.get().into();
+        // @TODO
+        let _release: f64 = self.params.release.get().into();
+
+        let alpha = if self.note_duration < attack {
+            self.note_duration / attack
+        } else {
+            1.0
+        };
+
+        let alpha = if self.note_duration >= alpha {
+            -(self.note_duration - decay)
+        } else {
+            alpha
+        };
+
+        signal * alpha
+    }
 }
 
 impl Plugin for Savoy {
@@ -219,7 +252,6 @@ impl Plugin for Savoy {
 
         for sample_index in 0..samples {
             let time = self.time;
-            let note_duration = self.note_duration;
 
             let osc = Savoy::oscillator(self.params.oscillator.get());
 
@@ -231,26 +263,28 @@ impl Plugin for Savoy {
             if let Some(pitch) = self.note {
                 let signal = Savoy::signal(time, pitch, shape);
 
-                let attack: f64 = self.params.attack.get().into();
-
-                // @TODO
-                let decay: f64 = self.params.decay.get().into();
-                // @TODO
-                let sustain: f64 = self.params.sustain.get().into();
-                // @TODO
-                let release: f64 = self.params.release.get().into();
-
-                let alpha =
-                    if note_duration < attack { note_duration / attack } else { 1.0 };
-
                 let amplitude = midi_velocity_to_amplitude(self.velocity);
+
+                let attack: f64 = self.params.attack.get().into();
+                let alpha = if self.note_duration < attack {
+                    self.note_duration / attack
+                } else {
+                    1.0
+                };
 
                 output_sample = (signal * alpha * amplitude) as f32;
 
                 self.time += per_sample;
                 self.note_duration += per_sample;
             } else {
-                output_sample = 0.0;
+                let release = self.params.release.get();
+                let alpha = if release > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                };
+
+                output_sample = alpha;
             }
 
             for buffer_index in 0..output_count {
@@ -311,7 +345,7 @@ impl PluginParameters for SavoyParameters {
 
     fn get_parameter_name(&self, index: i32) -> String {
         match index {
-            0 => "Osc",
+            0 => "Oscillator",
             1 => "Attack",
             2 => "Decay",
             3 => "Sustain",
