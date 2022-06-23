@@ -1,18 +1,21 @@
 #[macro_use]
 extern crate vst;
 
+mod params;
+
+use fundsp::hacker::*;
+
+use params::Parameters;
+
 use std::f64::consts::PI;
 use std::sync::Arc;
+use std::time::Duration;
 
-use vst::api::{Events, Supported};
+use vst::api::Supported;
 use vst::buffer::AudioBuffer;
-use vst::event::Event;
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
-use vst::util::AtomicFloat;
 
-mod envelope;
-
-use envelope::{Envelope, EnvelopeStage};
+use wmidi::{Note, Velocity};
 
 /// Returns the floating-point remainder of the given numerator/denominator.
 ///
@@ -53,58 +56,18 @@ enum Oscillator {
     Triangle,
 }
 
-struct SavoyParameters {
-    oscillator: AtomicFloat,
-    attack: AtomicFloat,
-    decay: AtomicFloat,
-    sustain: AtomicFloat,
-    release: AtomicFloat,
-}
-
-impl Default for SavoyParameters {
-    fn default() -> Self {
-        SavoyParameters {
-            oscillator: AtomicFloat::new(0.0),
-            attack: AtomicFloat::new(0.0),
-            decay: AtomicFloat::new(1.0),
-            sustain: AtomicFloat::new(1.0),
-            release: AtomicFloat::new(0.0),
-        }
-    }
-}
-
-#[derive(Default)]
 struct Savoy {
     sample_rate: f64,
-    time: f64,
-    note_duration: f64,
-    note: Option<u8>,
-    velocity: u8,
-    params: Arc<SavoyParameters>,
+    time: Duration,
+    note: Option<(Note, Velocity)>,
+    enabled: bool,
+    params: Arc<Parameters>,
+    audio: Box<dyn AudioUnit64 + Send>,
 }
 
 impl Savoy {
     fn time_per_sample(&self) -> f64 {
         1.0 / self.sample_rate
-    }
-
-    /// Process an incoming midi event.
-    ///
-    /// The midi data is split up like so:
-    ///
-    /// * `data[0]`: Contains the status and the channel. Source: [source]
-    /// * `data[1]`: Contains the supplemental data for the message - so, if this was a
-    ///   NoteOn then this would contain the note.
-    /// * `data[2]`: Further supplemental data. Would be velocity in the case of a NoteOn
-    ///   message.
-    ///
-    /// [source]: http://www.midimountain.com/midi/midi_status.htm
-    fn process_midi_event(&mut self, data: [u8; 3]) {
-        match data[0] {
-            128 => self.note_off(data[1]),
-            144 => self.note_on(data[1], data[2]),
-            _ => (),
-        }
     }
 
     fn oscillator(osc_parameter: f32) -> Option<Oscillator> {
@@ -165,45 +128,9 @@ impl Savoy {
         }
     }
 
-    fn note_on(&mut self, note: u8, velocity: u8) {
-        self.note_duration = 0.0;
-        self.note = Some(note);
-        self.velocity = velocity;
-    }
-
-    fn note_off(&mut self, note: u8) {
-        if self.note == Some(note) {
-            self.note = None
-        }
-    }
-
-    fn envelope_multiplier(start: f64, end: f64, length: f64) -> f64 {
-        1.0 + ((end.ln() - start.ln()) / length)
-    }
-
-    fn envelope(&self, signal: f64) -> f64 {
-        let attack: f64 = self.params.attack.get().into();
-
-        // @TODO
-        let decay: f64 = self.params.decay.get().into();
-        // @TODO
-        let sustain: f64 = self.params.sustain.get().into();
-        // @TODO
-        let _release: f64 = self.params.release.get().into();
-
-        let alpha = if self.note_duration < attack {
-            self.note_duration / attack
-        } else {
-            1.0
-        };
-
-        let alpha = if self.note_duration >= alpha {
-            -(self.note_duration - decay)
-        } else {
-            alpha
-        };
-
-        signal * alpha
+    #[inline(always)]
+    fn set_tag(&mut self, tag: Tag, value: f64) {
+        self.audio.set(tag as i64, value);
     }
 }
 
@@ -221,13 +148,20 @@ impl Plugin for Savoy {
     }
 
     fn new(_host: HostCallback) -> Self {
+        let freq = || tag(Tag::Freq as i64, 440.);
+
+        let offset = || tag(Tag::NoteOn as i64, 0.);
+        let env = || offset() >> envelope2(|t, offset| downarc((t - offset) * 2.));
+
+        let audio_graph = freq() >> sine() * freq() + freq() >> env() * sine() >> split::<U2>();
+
         Savoy {
             sample_rate: 44100.0,
-            note_duration: 0.0,
-            time: 0.0,
+            time: Duration::default(),
             note: None,
-            velocity: 0b0,
-            params: Arc::new(SavoyParameters::default()),
+            params: Arc::new(Parameters::default()),
+            audio: Box::new(audio_graph) as Box<dyn AudioUnit64 + Send>,
+            enabled: false,
         }
     }
 
@@ -240,66 +174,70 @@ impl Plugin for Savoy {
     }
 
     fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
-        let samples = buffer.samples();
+        // ------------------------------------------- //
+        // 3. Using fundsp to process our audio buffer //
+        // ------------------------------------------- //
+        let (_, mut outputs) = buffer.split();
+        if outputs.len() == 2 {
+            let (left, right) = (outputs.get_mut(0), outputs.get_mut(1));
 
-        let (_, mut output_buffer) = buffer.split();
+            for (left_chunk, right_chunk) in left
+                .chunks_mut(MAX_BUFFER_SIZE)
+                .zip(right.chunks_mut(MAX_BUFFER_SIZE))
+            {
+                let mut right_buffer = [0f64; MAX_BUFFER_SIZE];
+                let mut left_buffer = [0f64; MAX_BUFFER_SIZE];
 
-        let output_count = output_buffer.len();
+                if let Some((note, ..)) = self.note {
+                    self.set_tag(Tag::Freq, note.to_freq_f64())
+                }
 
-        let per_sample = self.time_per_sample();
+                if self.enabled {
+                    // -------------- //
+                    // 5. Timekeeping //
+                    // -------------- //
+                    self.time += Duration::from_secs_f64(MAX_BUFFER_SIZE as f64 / self.sample_rate);
+                    self.audio.process(
+                        MAX_BUFFER_SIZE,
+                        &[],
+                        &mut [&mut left_buffer, &mut right_buffer],
+                    );
+                }
 
-        let mut output_sample;
+                for (chunk, output) in left_chunk.iter_mut().zip(left_buffer.iter()) {
+                    *chunk = *output as f32;
+                }
 
-        for sample_index in 0..samples {
-            let time = self.time;
-
-            let osc = Savoy::oscillator(self.params.oscillator.get());
-
-            let shape = match osc {
-                Some(osc) => osc,
-                None => Oscillator::Sine,
-            };
-
-            if let Some(pitch) = self.note {
-                let signal = Savoy::signal(time, pitch, shape);
-
-                let amplitude = midi_velocity_to_amplitude(self.velocity);
-
-                let attack: f64 = self.params.attack.get().into();
-                let alpha = if self.note_duration < attack {
-                    self.note_duration / attack
-                } else {
-                    1.0
-                };
-
-                output_sample = (signal * alpha * amplitude) as f32;
-
-                self.time += per_sample;
-                self.note_duration += per_sample;
-            } else {
-                let release = self.params.release.get();
-                let alpha = if release > 0.0 {
-                    1.0
-                } else {
-                    0.0
-                };
-
-                output_sample = alpha;
-            }
-
-            for buffer_index in 0..output_count {
-                let buffer = output_buffer.get_mut(buffer_index);
-                buffer[sample_index] = output_sample;
+                for (chunk, output) in right_chunk.iter_mut().zip(right_buffer.iter()) {
+                    *chunk = *output as f32;
+                }
             }
         }
     }
 
-    /// Process any incoming midi events.
-    fn process_events(&mut self, events: &Events) {
+    fn process_events(&mut self, events: &vst::api::Events) {
         for event in events.events() {
-            match event {
-                Event::Midi(ev) => self.process_midi_event(ev.data),
-                _ => (),
+            if let vst::event::Event::Midi(midi) = event {
+                if let Ok(midi) = wmidi::MidiMessage::try_from(midi.data.as_slice()) {
+                    match midi {
+                        wmidi::MidiMessage::NoteOn(_channel, note, velocity) => {
+                            // ----------------------------------------- //
+                            // 6. Set `NoteOn` time tag and enable synth //
+                            // ----------------------------------------- //
+                            self.set_tag(Tag::NoteOn, self.time.as_secs_f64());
+                            self.note = Some((note, velocity));
+                            self.enabled = true;
+                        }
+                        wmidi::MidiMessage::NoteOff(_channel, note, _velocity) => {
+                            if let Some((current_note, ..)) = self.note {
+                                if current_note == note {
+                                    self.note = None;
+                                }
+                            }
+                        }
+                        _ => (),
+                    }
+                }
             }
         }
     }
@@ -309,51 +247,11 @@ impl Plugin for Savoy {
     }
 }
 
-impl PluginParameters for SavoyParameters {
-    fn get_parameter(&self, index: i32) -> f32 {
-        match index {
-            0 => self.oscillator.get(),
-            1 => self.attack.get(),
-            2 => self.decay.get(),
-            3 => self.sustain.get(),
-            4 => self.release.get(),
-            _ => 0.0,
-        }
-    }
-
-    fn set_parameter(&self, index: i32, value: f32) {
-        match index {
-            0 => self.oscillator.set(value),
-            1 => self.attack.set(value),
-            2 => self.decay.set(value),
-            3 => self.sustain.set(value),
-            4 => self.release.set(value),
-            _ => (),
-        }
-    }
-
-    fn get_parameter_text(&self, index: i32) -> String {
-        match index {
-            0 => format!("{:.2}", (self.oscillator.get() - 0.5) * 2f32),
-            1 => format!("{:.2}", (self.attack.get() - 0.5) * 2f32),
-            2 => format!("{:.2}", (self.decay.get() - 0.5) * 2f32),
-            3 => format!("{:.2}", (self.sustain.get() - 0.5) * 2f32),
-            4 => format!("{:.2}", (self.release.get() - 0.5) * 2f32),
-            _ => "".to_string(),
-        }
-    }
-
-    fn get_parameter_name(&self, index: i32) -> String {
-        match index {
-            0 => "Oscillator",
-            1 => "Attack",
-            2 => "Decay",
-            3 => "Sustain",
-            4 => "Release",
-            _ => "",
-        }
-        .to_string()
-    }
+#[derive(Clone, Copy)]
+pub enum Tag {
+    Freq = 0,
+    Modulation = 1,
+    NoteOn = 2,
 }
 
 plugin_main!(Savoy);
