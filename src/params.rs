@@ -1,12 +1,14 @@
+use std::convert::TryFrom;
+
 use vst::plugin::PluginParameters;
 use vst::util::AtomicFloat;
 
 pub struct Parameters {
-    oscillator: AtomicFloat,
-    attack: AtomicFloat,
-    decay: AtomicFloat,
-    sustain: AtomicFloat,
-    release: AtomicFloat,
+    pub oscillator: AtomicFloat,
+    pub attack: AtomicFloat,
+    pub decay: AtomicFloat,
+    pub sustain: AtomicFloat,
+    pub release: AtomicFloat,
 }
 
 impl Default for Parameters {
@@ -65,5 +67,28 @@ impl PluginParameters for Parameters {
             _ => "",
         }
         .to_string()
+    }
+}
+
+pub enum Parameter {
+    Oscillator = 0,
+    Attack = 1,
+    Decay = 2,
+    Sustain = 3,
+    Release = 4,
+}
+
+impl TryFrom<i32> for Parameter {
+    type Error = ();
+
+    fn try_from(v: i32) -> Result<Self, Self::Error> {
+        match v {
+            x if x == Parameter::Oscillator as i32 => Ok(Parameter::Oscillator),
+            x if x == Parameter::Attack as i32 => Ok(Parameter::Attack),
+            x if x == Parameter::Decay as i32 => Ok(Parameter::Decay),
+            x if x == Parameter::Sustain as i32 => Ok(Parameter::Sustain),
+            x if x == Parameter::Release as i32 => Ok(Parameter::Release),
+            _ => Err(()),
+        }
     }
 }
