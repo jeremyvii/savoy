@@ -5,9 +5,8 @@ mod params;
 
 use fundsp::hacker::*;
 
-use params::Parameters;
+use params::{Parameter, Parameters};
 
-use std::f64::consts::PI;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,15 +15,6 @@ use vst::buffer::AudioBuffer;
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
 
 use wmidi::{Note, Velocity};
-
-pub const TAU: f64 = PI * 2.0;
-
-enum Oscillator {
-    Saw,
-    Sine,
-    Square,
-    Triangle,
-}
 
 struct Savoy {
     sample_rate: f64,
@@ -56,16 +46,10 @@ impl Plugin for Savoy {
     }
 
     fn new(_host: HostCallback) -> Self {
-        let Parameters {
-            oscillator: _,
-            attack,
-            decay,
-            sustain,
-            release,
-        } = Parameters::default();
+        let Parameters { oscillator: _, attack, decay, sustain, release } = Parameters::default();
 
         let offset_on = || tag(Tag::NoteOn as i64, 0.0);
-        let env_on = |attack, decay, sustain| offset_on() >> envelope2(move |t, offset| {
+        let env_on = |attack: f64, decay: f64, sustain: f64| offset_on() >> envelope2(move |t, offset| {
             let position = t - offset;
 
             if position < attack {
@@ -80,7 +64,7 @@ impl Plugin for Savoy {
         });
 
         let offset_off = || tag(Tag::NoteOff as i64, 0.0);
-        let env_off = |release| offset_off() >> envelope2(move |t, offset| {
+        let env_off = |release: f64| offset_off() >> envelope2(move |t, offset| {
             // Somewhat hacky: using 0.0 as a sentinel value indicating that the 'off'
             // envelope should be disabled when a note is playing.
             if offset <= 0.0 {
@@ -95,16 +79,13 @@ impl Plugin for Savoy {
             }
         });
 
-        let _env = env_on(attack.get() as f64, decay.get() as f64, sustain.get() as f64) * env_off(release.get() as f64);
+        let env = env_on(attack.get().into(), decay.get().into(), sustain.get().into()) * env_off(release.get().into());
 
         let freq = || tag(Tag::Freq as i64, 440.);
 
-        let offset = || tag(Tag::NoteOn as i64, 0.);
-        let test_env = || offset() >> envelope2(|t, offset| downarc((t - offset) * 2.));
-
         let audio_graph = freq()
             >> sine() * freq()
-            >> test_env() * sine()
+            >> env * sine()
             >> declick()
             >> split::<U2>();
 
@@ -127,9 +108,6 @@ impl Plugin for Savoy {
     }
 
     fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
-        // ------------------------------------------- //
-        // 3. Using fundsp to process our audio buffer //
-        // ------------------------------------------- //
         let (_, mut outputs) = buffer.split();
         if outputs.len() == 2 {
             let (left, right) = (outputs.get_mut(0), outputs.get_mut(1));
@@ -178,6 +156,7 @@ impl Plugin for Savoy {
                         wmidi::MidiMessage::NoteOff(_channel, note, _velocity) => {
                             if let Some((current_note, ..)) = self.note {
                                 if current_note == note {
+                                    self.set_tag(Tag::NoteOff, self.time.as_secs_f64());
                                     self.note = None;
                                 }
                             }

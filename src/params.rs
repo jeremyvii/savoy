@@ -18,7 +18,7 @@ impl Default for Parameters {
             attack: AtomicFloat::new(0.0),
             decay: AtomicFloat::new(1.0),
             sustain: AtomicFloat::new(1.0),
-            release: AtomicFloat::new(0.0),
+            release: AtomicFloat::new(0.2),
         }
     }
 }
