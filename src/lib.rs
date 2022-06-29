@@ -5,6 +5,8 @@ mod params;
 
 use fundsp::hacker::*;
 
+use num_derive::FromPrimitive;
+
 use params::{Parameter, Parameters};
 
 use std::sync::Arc;
@@ -17,7 +19,7 @@ use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters}
 use wmidi::{Note, Velocity};
 
 struct Savoy {
-    sample_rate: f64,
+    sample_rate: f32,
     time: Duration,
     note: Option<(Note, Velocity)>,
     enabled: bool,
@@ -29,6 +31,11 @@ impl Savoy {
     #[inline(always)]
     fn set_tag(&mut self, tag: Tag, value: f64) {
         self.audio.set(tag as i64, value);
+    }
+
+    #[inline(always)]
+    fn set_tag_with_param(&mut self, tag: Tag, param: Parameter) {
+        self.set_tag(tag, self.params.get_parameter(param as i32) as f64);
     }
 }
 
@@ -79,13 +86,21 @@ impl Plugin for Savoy {
             }
         });
 
-        let env = env_on(attack.get().into(), decay.get().into(), sustain.get().into()) * env_off(release.get().into());
+
+        let attack = || tag(Tag::Attack as i64, attack.get() as f64);
+        let decay = || tag(Tag::Decay as i64, decay.get() as f64);
+        let sustain = || tag(Tag::Sustain as i64, sustain.get() as f64);
+        let release = || tag(Tag::Release as i64, release.get() as f64);
+
+        //let env = env_on(attack(), decay(), sustain()) * env_off(release());
+        //let offset = || tag(Tag::NoteOn as i64, 0.);
+        //let env = || offset() >> envelope2(|t, offset| downarc((t - offset) * 2.));
 
         let freq = || tag(Tag::Freq as i64, 440.);
 
         let audio_graph = freq()
             >> sine() * freq()
-            >> env * sine()
+            >> env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()
             >> declick()
             >> split::<U2>();
 
@@ -119,12 +134,17 @@ impl Plugin for Savoy {
                 let mut right_buffer = [0f64; MAX_BUFFER_SIZE];
                 let mut left_buffer = [0f64; MAX_BUFFER_SIZE];
 
+                self.set_tag_with_param(Tag::Attack, Parameter::Attack);
+                self.set_tag_with_param(Tag::Decay, Parameter::Decay);
+                self.set_tag_with_param(Tag::Sustain, Parameter::Sustain);
+                self.set_tag_with_param(Tag::Release, Parameter::Release);
+
                 if let Some((note, ..)) = self.note {
                     self.set_tag(Tag::Freq, note.to_freq_f64())
                 }
 
                 if self.enabled {
-                    self.time += Duration::from_secs_f64(MAX_BUFFER_SIZE as f64 / self.sample_rate);
+                    self.time += Duration::from_secs_f32(MAX_BUFFER_SIZE as f32 / self.sample_rate);
                     self.audio.process(
                         MAX_BUFFER_SIZE,
                         &[],
@@ -156,8 +176,8 @@ impl Plugin for Savoy {
                         wmidi::MidiMessage::NoteOff(_channel, note, _velocity) => {
                             if let Some((current_note, ..)) = self.note {
                                 if current_note == note {
-                                    self.set_tag(Tag::NoteOff, self.time.as_secs_f64());
                                     self.note = None;
+                                    self.set_tag(Tag::NoteOff, self.time.as_secs_f64());
                                 }
                             }
                         }
@@ -168,17 +188,23 @@ impl Plugin for Savoy {
         }
     }
 
-    fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
-        Arc::clone(&self.params) as Arc<dyn PluginParameters>
+    fn set_sample_rate(&mut self, rate: f32) {
+        self.sample_rate = rate;
+        self.time = Duration::default();
+        self.audio.reset(Some(rate as f64));
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(FromPrimitive, Clone, Copy)]
 pub enum Tag {
-    Freq = 0,
-    Modulation = 1,
-    NoteOn = 2,
-    NoteOff = 3,
+    Oscillator = 0,
+    Attack = 1,
+    Decay = 2,
+    Sustain = 3,
+    Release = 4,
+    Freq = 5,
+    NoteOn = 6,
+    NoteOff = 7,
 }
 
 plugin_main!(Savoy);

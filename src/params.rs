@@ -1,4 +1,7 @@
-use std::convert::TryFrom;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+
+use std::fmt::Display;
 
 use vst::plugin::PluginParameters;
 use vst::util::AtomicFloat;
@@ -25,51 +28,36 @@ impl Default for Parameters {
 
 impl PluginParameters for Parameters {
     fn get_parameter(&self, index: i32) -> f32 {
-        match index {
-            0 => self.oscillator.get(),
-            1 => self.attack.get(),
-            2 => self.decay.get(),
-            3 => self.sustain.get(),
-            4 => self.release.get(),
+        match FromPrimitive::from_i32(index) {
+            Some(Parameter::Oscillator) => self.oscillator.get(),
+            Some(Parameter::Attack) => self.attack.get(),
+            Some(Parameter::Decay) => self.decay.get(),
+            Some(Parameter::Sustain) => self.sustain.get(),
+            Some(Parameter::Release) => self.release.get(),
             _ => 0.0,
         }
     }
 
     fn set_parameter(&self, index: i32, value: f32) {
-        match index {
-            0 => self.oscillator.set(value),
-            1 => self.attack.set(value),
-            2 => self.decay.set(value),
-            3 => self.sustain.set(value),
-            4 => self.release.set(value),
+        match FromPrimitive::from_i32(index) {
+            Some(Parameter::Oscillator) => self.oscillator.set(value),
+            Some(Parameter::Attack) => self.attack.set(value),
+            Some(Parameter::Decay) => self.decay.set(value),
+            Some(Parameter::Sustain) => self.sustain.set(value),
+            Some(Parameter::Release) => self.release.set(value),
             _ => (),
         }
     }
 
-    fn get_parameter_text(&self, index: i32) -> String {
-        match index {
-            0 => format!("{:.2}", (self.oscillator.get() - 0.5) * 2f32),
-            1 => format!("{:.2}", (self.attack.get() - 0.5) * 2f32),
-            2 => format!("{:.2}", (self.decay.get() - 0.5) * 2f32),
-            3 => format!("{:.2}", (self.sustain.get() - 0.5) * 2f32),
-            4 => format!("{:.2}", (self.release.get() - 0.5) * 2f32),
-            _ => "".to_string(),
-        }
-    }
-
     fn get_parameter_name(&self, index: i32) -> String {
-        match index {
-            0 => "Oscillator",
-            1 => "Attack",
-            2 => "Decay",
-            3 => "Sustain",
-            4 => "Release",
-            _ => "",
-        }
-        .to_string()
+        let param: Option<Parameter> = FromPrimitive::from_i32(index);
+        param
+            .map(|f| f.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 }
 
+#[derive(FromPrimitive, Clone, Copy)]
 pub enum Parameter {
     Oscillator = 0,
     Attack = 1,
@@ -78,17 +66,18 @@ pub enum Parameter {
     Release = 4,
 }
 
-impl TryFrom<i32> for Parameter {
-    type Error = ();
-
-    fn try_from(v: i32) -> Result<Self, Self::Error> {
-        match v {
-            x if x == Parameter::Oscillator as i32 => Ok(Parameter::Oscillator),
-            x if x == Parameter::Attack as i32 => Ok(Parameter::Attack),
-            x if x == Parameter::Decay as i32 => Ok(Parameter::Decay),
-            x if x == Parameter::Sustain as i32 => Ok(Parameter::Sustain),
-            x if x == Parameter::Release as i32 => Ok(Parameter::Release),
-            _ => Err(()),
-        }
+impl Display for Parameter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Parameter::Oscillator => "Oscillator",
+                Parameter::Attack => "Attack",
+                Parameter::Decay => "Decay",
+                Parameter::Sustain => "Sustain",
+                Parameter::Release => "Release",
+            }
+        )
     }
 }
