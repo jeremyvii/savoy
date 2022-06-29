@@ -98,9 +98,7 @@ impl Plugin for Savoy {
 
         let freq = || tag(Tag::Freq as i64, 440.);
 
-        let audio_graph = freq()
-            >> sine() * freq()
-            >> env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()
+        let audio_graph = freq() >> (sine() * freq()) >> (env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine())
             >> declick()
             >> split::<U2>();
 
