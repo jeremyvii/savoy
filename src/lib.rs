@@ -28,11 +28,30 @@ struct Savoy {
 }
 
 impl Savoy {
+    /// Processes midi information when a note is pressed.
+    fn note_on(&mut self, note: Note, velocity: Velocity) {
+        self.set_tag(Tag::NoteOn, self.time.as_secs_f64());
+        self.note = Some((note, velocity));
+        self.enabled = true;
+    }
+
+    /// Processes midi information when a note is released.
+    fn note_off(&mut self, note: Note) {
+        if let Some((current_note, ..)) = self.note {
+            if current_note == note {
+                self.note = None;
+                self.set_tag(Tag::NoteOff, self.time.as_secs_f64());
+            }
+        }
+    }
+
+    /// Sets a tag value to the audio graph.
     #[inline(always)]
     fn set_tag(&mut self, tag: Tag, value: f64) {
         self.audio.set(tag as i64, value);
     }
 
+    /// Sets a tag with a parameter value to the audio graph.
     #[inline(always)]
     fn set_tag_with_param(&mut self, tag: Tag, param: Parameter) {
         self.set_tag(tag, self.params.get_parameter(param as i32) as f64);
@@ -52,33 +71,41 @@ impl Plugin for Savoy {
         }
     }
 
+    fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
+        Arc::clone(&self.params) as Arc<dyn PluginParameters>
+    }
+
     fn new(_host: HostCallback) -> Self {
         let Parameters { oscillator: _, attack, decay, sustain, release } = Parameters::default();
 
         let offset_on = || tag(Tag::NoteOn as i64, 0.0);
-        let env_on = |attack: f64, decay: f64, sustain: f64| offset_on() >> envelope2(move |t, offset| {
-            let position = t - offset;
+        let env_on = |attack: f64, decay: f64, sustain: f64| offset_on() >> envelope2(move |seconds, offset| {
+            let position = seconds - offset;
 
             if position < attack {
+                // Attack stage.
                 position / attack
             } else if position < decay + attack{
+                // Decay stage.
                 let decay_position = (position - attack) / decay;
 
                 (1.0 - decay_position) * (1.0 - sustain) + sustain
             } else {
+                // Sustain stage.
                 sustain
             }
         });
 
         let offset_off = || tag(Tag::NoteOff as i64, 0.0);
-        let env_off = |release: f64| offset_off() >> envelope2(move |t, offset| {
+        let env_off = |release: f64| offset_off() >> envelope2(move |seconds, offset| {
             // Somewhat hacky: using 0.0 as a sentinel value indicating that the 'off'
             // envelope should be disabled when a note is playing.
             if offset <= 0.0 {
                 return 1.0;
             }
 
-            let position = t - offset;
+            let position = seconds - offset;
+
             if position < release {
                 1.0 - position / release
             } else {
@@ -86,23 +113,17 @@ impl Plugin for Savoy {
             }
         });
 
-
         let attack = || tag(Tag::Attack as i64, attack.get() as f64);
         let decay = || tag(Tag::Decay as i64, decay.get() as f64);
         let sustain = || tag(Tag::Sustain as i64, sustain.get() as f64);
         let release = || tag(Tag::Release as i64, release.get() as f64);
 
-        //let env = env_on(attack(), decay(), sustain()) * env_off(release());
-        //let offset = || tag(Tag::NoteOn as i64, 0.);
-        //let env = || offset() >> envelope2(|t, offset| downarc((t - offset) * 2.));
+        let envelope = env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value());
 
-        let freq = || tag(Tag::Freq as i64, 440.);
+        let pitch = || tag(Tag::Pitch as i64, 440.);
+        let velocity = || tag(Tag::Velocity as i64, 1.);
 
-        let amplitude = || tag(Tag::Amplitude as i64, 1.);
-
-        let audio_graph = freq() >> (sine() * freq()) >> ((env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()) * amplitude())
-            >> declick()
-            >> split::<U2>();
+        let audio_graph = pitch() >> (sine() * pitch()) >> ((envelope * sine()) * velocity()) >> declick() >> split::<U2>();
 
         Self {
             sample_rate: 44100.0,
@@ -140,12 +161,13 @@ impl Plugin for Savoy {
                 self.set_tag_with_param(Tag::Release, Parameter::Release);
 
                 if let Some((note, velocity)) = self.note {
-                    self.set_tag(Tag::Freq, note.to_freq_f64());
-                    self.set_tag(Tag::Amplitude, u8::from(velocity) as f64 / 127.);
+                    self.set_tag(Tag::Pitch, note.to_freq_f64());
+                    self.set_tag(Tag::Velocity, u8::from(velocity) as f64 / 127.);
                 }
 
                 if self.enabled {
                     self.time += Duration::from_secs_f32(MAX_BUFFER_SIZE as f32 / self.sample_rate);
+
                     self.audio.process(
                         MAX_BUFFER_SIZE,
                         &[],
@@ -164,24 +186,17 @@ impl Plugin for Savoy {
         }
     }
 
+    /// Process incoming midi events.
+    ///
+    /// This plugin process midi notes and velocity. Any other events are
+    /// ignored.
     fn process_events(&mut self, events: &vst::api::Events) {
         for event in events.events() {
             if let vst::event::Event::Midi(midi) = event {
                 if let Ok(midi) = wmidi::MidiMessage::try_from(midi.data.as_slice()) {
                     match midi {
-                        wmidi::MidiMessage::NoteOn(_channel, note, velocity) => {
-                            self.set_tag(Tag::NoteOn, self.time.as_secs_f64());
-                            self.note = Some((note, velocity));
-                            self.enabled = true;
-                        }
-                        wmidi::MidiMessage::NoteOff(_channel, note, _velocity) => {
-                            if let Some((current_note, ..)) = self.note {
-                                if current_note == note {
-                                    self.note = None;
-                                    self.set_tag(Tag::NoteOff, self.time.as_secs_f64());
-                                }
-                            }
-                        }
+                        wmidi::MidiMessage::NoteOn(_channel, note, velocity) => self.note_on(note, velocity),
+                        wmidi::MidiMessage::NoteOff(_channel, note, _velocity) => self.note_off(note),
                         _ => (),
                     }
                 }
@@ -189,6 +204,7 @@ impl Plugin for Savoy {
         }
     }
 
+    /// Handle a sample rate change by the host.
     fn set_sample_rate(&mut self, rate: f32) {
         self.sample_rate = rate;
         self.time = Duration::default();
@@ -203,10 +219,10 @@ pub enum Tag {
     Decay = 2,
     Sustain = 3,
     Release = 4,
-    Freq = 5,
+    Pitch = 5,
     NoteOn = 6,
     NoteOff = 7,
-    Amplitude = 8,
+    Velocity = 10,
 }
 
 plugin_main!(Savoy);
