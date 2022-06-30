@@ -19,8 +19,8 @@ impl Default for Parameters {
         Parameters {
             oscillator: AtomicFloat::new(0.0),
             attack: AtomicFloat::new(0.0),
-            decay: AtomicFloat::new(1.0),
-            sustain: AtomicFloat::new(1.0),
+            decay: AtomicFloat::new(0.6),
+            sustain: AtomicFloat::new(0.6),
             release: AtomicFloat::new(0.2),
         }
     }
@@ -59,11 +59,11 @@ impl PluginParameters for Parameters {
 
 #[derive(FromPrimitive, Clone, Copy)]
 pub enum Parameter {
-    Oscillator = 0,
-    Attack = 1,
-    Decay = 2,
-    Sustain = 3,
-    Release = 4,
+    Oscillator,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
 }
 
 impl Display for Parameter {

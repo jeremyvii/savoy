@@ -12,9 +12,7 @@ use params::{Parameter, Parameters};
 use std::sync::Arc;
 use std::time::Duration;
 
-use vst::api::Supported;
-use vst::buffer::AudioBuffer;
-use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
+use vst::prelude::*;
 
 use wmidi::{Note, Velocity};
 
@@ -78,7 +76,9 @@ impl Plugin for Savoy {
     fn new(_host: HostCallback) -> Self {
         let Parameters { oscillator: _, attack, decay, sustain, release } = Parameters::default();
 
-        let offset_on = || tag(Tag::NoteOn as i64, 0.0);
+        let time = Duration::default();
+
+        let offset_on = || tag(Tag::NoteOn as i64, time.as_secs_f64());
         let env_on = |attack: f64, decay: f64, sustain: f64| offset_on() >> envelope2(move |seconds, offset| {
             let position = seconds - offset;
 
@@ -96,10 +96,10 @@ impl Plugin for Savoy {
             }
         });
 
-        let offset_off = || tag(Tag::NoteOff as i64, 0.0);
+        let offset_off = || tag(Tag::NoteOff as i64, time.as_secs_f64());
         let env_off = |release: f64| offset_off() >> envelope2(move |seconds, offset| {
-            // Somewhat hacky: using 0.0 as a sentinel value indicating that the 'off'
-            // envelope should be disabled when a note is playing.
+            // Use 0.0 as a sentinel value indicating that the 'off' envelope
+            // should be disabled when a note is playing.
             if offset <= 0.0 {
                 return 1.0;
             }
@@ -118,16 +118,16 @@ impl Plugin for Savoy {
         let sustain = || tag(Tag::Sustain as i64, sustain.get() as f64);
         let release = || tag(Tag::Release as i64, release.get() as f64);
 
-        let envelope = env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value());
+        let env = env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value());
 
         let pitch = || tag(Tag::Pitch as i64, 440.);
         let velocity = || tag(Tag::Velocity as i64, 1.);
 
-        let audio_graph = pitch() >> (sine() * pitch()) >> ((envelope * sine()) * velocity()) >> declick() >> split::<U2>();
+        let audio_graph = pitch() >> (sine() * pitch()) >> ((env * sine()) * velocity()) >> declick() >> split::<U2>();
 
         Self {
             sample_rate: 44100.0,
-            time: Duration::default(),
+            time,
             note: None,
             params: Arc::new(Parameters::default()),
             audio: Box::new(audio_graph) as Box<dyn AudioUnit64 + Send>,
@@ -145,6 +145,7 @@ impl Plugin for Savoy {
 
     fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
         let (_, mut outputs) = buffer.split();
+
         if outputs.len() == 2 {
             let (left, right) = (outputs.get_mut(0), outputs.get_mut(1));
 
@@ -214,15 +215,15 @@ impl Plugin for Savoy {
 
 #[derive(FromPrimitive, Clone, Copy)]
 pub enum Tag {
-    Oscillator = 0,
-    Attack = 1,
-    Decay = 2,
-    Sustain = 3,
-    Release = 4,
-    Pitch = 5,
-    NoteOn = 6,
-    NoteOff = 7,
-    Velocity = 10,
+    Oscillator,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+    Pitch,
+    NoteOn,
+    NoteOff,
+    Velocity,
 }
 
 plugin_main!(Savoy);
