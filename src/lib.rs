@@ -98,7 +98,9 @@ impl Plugin for Savoy {
 
         let freq = || tag(Tag::Freq as i64, 440.);
 
-        let audio_graph = freq() >> (sine() * freq()) >> (env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine())
+        let amplitude = || tag(Tag::Amplitude as i64, 1.);
+
+        let audio_graph = freq() >> (sine() * freq()) >> (env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()) * amplitude()
             >> declick()
             >> split::<U2>();
 
@@ -137,8 +139,9 @@ impl Plugin for Savoy {
                 self.set_tag_with_param(Tag::Sustain, Parameter::Sustain);
                 self.set_tag_with_param(Tag::Release, Parameter::Release);
 
-                if let Some((note, ..)) = self.note {
-                    self.set_tag(Tag::Freq, note.to_freq_f64())
+                if let Some((note, velocity)) = self.note {
+                    self.set_tag(Tag::Freq, note.to_freq_f64());
+                    self.set_tag(Tag::Amplitude, u8::from(velocity) as f64 / 127.);
                 }
 
                 if self.enabled {
@@ -203,6 +206,7 @@ pub enum Tag {
     Freq = 5,
     NoteOn = 6,
     NoteOff = 7,
+    Amplitude = 8,
 }
 
 plugin_main!(Savoy);
