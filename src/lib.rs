@@ -100,7 +100,7 @@ impl Plugin for Savoy {
 
         let amplitude = || tag(Tag::Amplitude as i64, 1.);
 
-        let audio_graph = freq() >> (sine() * freq()) >> (env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()) * amplitude()
+        let audio_graph = freq() >> (sine() * freq()) >> ((env_on(attack().value(), decay().value(), sustain().value()) * env_off(release().value()) * sine()) * amplitude())
             >> declick()
             >> split::<U2>();
 
