@@ -81,19 +81,34 @@ impl Plugin for Savoy {
         let offset_on = || tag(Tag::NoteOn as i64, time.as_secs_f64());
         let env_on = |attack: f64, decay: f64, sustain: f64| offset_on() >> envelope2(move |seconds, offset| {
             let position = seconds - offset;
+            println!("env_on position value: {}", position);
 
-            if position < attack {
+            let result = if position < attack {
                 // Attack stage.
-                position / attack
+                let attack_stage_val = position / attack;
+
+                println!("Attack stage value: {}", attack_stage_val);
+
+                attack_stage_val
             } else if position < decay + attack{
                 // Decay stage.
                 let decay_position = (position - attack) / decay;
 
-                (1.0 - decay_position) * (1.0 - sustain) + sustain
+                let decay_stage_val = (1.0 - decay_position) * (1.0 - sustain) + sustain;
+
+                println!("Decay stage value: {}", decay_stage_val);
+
+                decay_stage_val
             } else {
+                let sustain_stage_val = sustain;
+
+                println!("Sustain stage value: {}", sustain_stage_val);
+
                 // Sustain stage.
-                sustain
-            }
+                sustain_stage_val
+            };
+
+            result
         });
 
         let offset_off = || tag(Tag::NoteOff as i64, time.as_secs_f64());
@@ -105,12 +120,17 @@ impl Plugin for Savoy {
             }
 
             let position = seconds - offset;
+            println!("env_off position value: {}", position);
 
-            if position < release {
+            let result = if position < release {
                 1.0 - position / release
             } else {
                 0.0
-            }
+            };
+
+            println!("Release stage value: {}", result);
+
+            result
         });
 
         let attack = || tag(Tag::Attack as i64, attack.get() as f64);
@@ -123,7 +143,12 @@ impl Plugin for Savoy {
         let pitch = || tag(Tag::Pitch as i64, 440.);
         let velocity = || tag(Tag::Velocity as i64, 1.);
 
-        let audio_graph = pitch() >> (sine() * pitch()) >> ((env * sine()) * velocity()) >> declick() >> split::<U2>();
+        let audio_graph =
+            pitch()
+            >> (sine() * pitch())
+            >> ((env * sine()) * velocity())
+            >> declick()
+            >> split::<U2>();
 
         Self {
             sample_rate: 44100.0,

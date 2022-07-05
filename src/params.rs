@@ -18,9 +18,9 @@ impl Default for Parameters {
     fn default() -> Self {
         Parameters {
             oscillator: AtomicFloat::new(0.0),
-            attack: AtomicFloat::new(0.0),
-            decay: AtomicFloat::new(0.6),
-            sustain: AtomicFloat::new(0.6),
+            attack: AtomicFloat::new(0.2),
+            decay: AtomicFloat::new(0.2),
+            sustain: AtomicFloat::new(0.8),
             release: AtomicFloat::new(0.2),
         }
     }
